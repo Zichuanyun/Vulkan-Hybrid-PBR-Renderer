@@ -1,5 +1,9 @@
 # Vulkan-Hybrid-PBR-Renderer
 
+## Quick Links
+
+[Milestone 1 Slides](https://docs.google.com/presentation/d/1LJ-EBeLDXqcZ0LzwrWjJPPy0J8T_foHZaoHBapNmU7w/edit?usp=sharing)
+
 ## Overview
 We’d like to implement a next generation hybrid ray-raster render engine for games in Vulkan.
 
