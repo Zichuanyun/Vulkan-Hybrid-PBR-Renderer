@@ -49,3 +49,6 @@ We will refer some ideas from previous 565 projects (see credits) but will imple
 ## Credits
 
 - [HybridRenderer](https://github.com/davidgrosman/FinalProject-HybridRenderer)
+- [tinyobjloader](https://github.com/syoyo/tinyobjloader)
+- [Vulkan Tutorial](https://vulkan-tutorial.com/)
+- [SaschaWillems/Vulkan](https://github.com/SaschaWillems/Vulkan)
