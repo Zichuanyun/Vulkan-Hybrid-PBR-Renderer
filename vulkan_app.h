@@ -25,13 +25,10 @@
 #include <array>
 #include <unordered_map>
 #include "camera.h"
+#include "app_util.h"
 
 const int WIDTH = 800;
 const int HEIGHT = 600;
-
-const std::string MODEL_PATH = "models/chalet.obj";
-const std::string ALBEDO_TEXTURE_PATH = "textures/chalet.jpg";
-const std::string NORMALMAP_TEXTURE_PATH = "";
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -52,9 +49,9 @@ const bool enableValidationLayers = true;
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
     std::optional<uint32_t> presentFamily;
-
+    std::optional<uint32_t> computeFamily;
     bool isComplete() {
-        return graphicsFamily.has_value() && presentFamily.has_value();
+        return graphicsFamily.has_value() && presentFamily.has_value() && computeFamily.has_value();
     }
 };
 
@@ -64,68 +61,39 @@ struct SwapChainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
-struct Vertex {
-    glm::vec3 pos;
-    glm::vec3 color;
-    glm::vec2 texCoord;
 
-    static VkVertexInputBindingDescription getBindingDescription() {
-        VkVertexInputBindingDescription bindingDescription = {};
-        bindingDescription.binding = 0;
-        bindingDescription.stride = sizeof(Vertex);
-        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-        return bindingDescription;
-    }
-
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions = {};
-
-        attributeDescriptions[0].binding = 0;
-        attributeDescriptions[0].location = 0;
-        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-        attributeDescriptions[1].binding = 0;
-        attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
-        return attributeDescriptions;
-    }
-
-    bool operator==(const Vertex& other) const {
-        return pos == other.pos && color == other.color && texCoord == other.texCoord;
-    }
-};
-
-namespace std {
-    template<> struct hash<Vertex> {
-        size_t operator()(Vertex const& vertex) const {
-            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
-        }
-    };
-}
-
-struct UniformBufferObject {
-    glm::mat4 model_1;
-    glm::mat4 model_2;
-    glm::mat4 model_3;
+struct DeferredUniformBufferObject {
+    glm::mat4 modelMatrix;
     glm::mat4 view;
     glm::mat4 proj;
     glm::mat4 deferredProj;
 };
 
+struct RTUniformBufferObject {							// Compute shader uniform block object
+    glm::vec3 lightPos = glm::vec3(0.f, 0.f, 0.f);
+    float aspectRatio = 1.333f;						// Aspect ratio of the viewport
+    struct {
+        glm::vec3 pos = glm::vec3(0.0f, 0.0f, 4.0f);
+        glm::vec3 lookat = glm::vec3(0.0f, 0.5f, 0.0f);
+    } camera;
+};
+
+struct RT_GEOM
+{
+	glm::mat4 transform;
+	glm::mat4 inverseTransform;
+};
 
 
+struct MyTexture
+{
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
+    VkSampler textureSampler;
+};
 
-
-struct MyBuffer {
+struct MyUniformBuffer {
     VkBuffer buffer;
     VkDeviceMemory deviceMem;
     VkDescriptorBufferInfo desBuffInfo;
@@ -133,132 +101,66 @@ struct MyBuffer {
     //VkMemoryPropertyFlags memProperyFlags;
 };
 
+struct Sphere {									// Shader uses std140 layout (so we only use vec4 instead of vec3)
+    glm::vec3 pos;
+    float radius;
+    glm::vec3 diffuse;
+    float specular;
+    uint32_t id;								// Id used to identify sphere for raytracing
+    glm::ivec3 _pad;
+};
+
+// SSBO plane declaration
+struct Plane {
+    glm::vec3 normal;
+    float distance;
+    glm::vec3 diffuse;
+    float specular;
+    uint32_t id;
+    glm::ivec3 _pad;
+};
+
+
+
 class VulkanApp {
 public:
     VulkanApp();
     void run();
 
 private:
-    GLFWwindow* window;
 
-    VkInstance instance;
-    VkDebugUtilsMessengerEXT callback;
-    VkSurfaceKHR surface;
+    GLFWwindow* window_;
 
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device;
+    VkInstance instance_;
+    VkDebugUtilsMessengerEXT callback_;
+    VkSurfaceKHR surface_;
 
-    VkQueue graphicsQueue;
-    VkQueue presentQueue;
+    VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
+    VkDevice device_;
 
-    VkSwapchainKHR swapChain;
-    std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
-    VkExtent2D swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
+    VkQueue queue_;
 
-    VkRenderPass renderPass;
-    VkDescriptorSetLayout descriptorSetLayout;
-    // TODO
-    //VkPipelineLayout pipelineLayout;
-    //VkPipeline graphicsPipeline;
+    VkSwapchainKHR swapchain_;
+    std::vector<VkImage> swapchain_images_;
+    VkFormat swapchain_imageformat_;
+    VkExtent2D swapchain_extent_;
+    std::vector<VkImageView> swapchain_imageviews_;
+    std::vector<VkFramebuffer> swapchain_framebuffers_;
 
-    VkCommandPool commandPool;
+    VkRenderPass deferred_renderpass_;
+    VkDescriptorSetLayout descriptor_set_layout_;
 
-    struct FrameBufferAttachment {
-        VkImage image;
-        VkDeviceMemory mem;
-        VkImageView view;
-    };
-
-    struct FrameBuffer {
-        VkFramebuffer frameBuffer;
-        FrameBufferAttachment position, normal, albedo;
-        FrameBufferAttachment depth;
-        VkRenderPass renderPass;
-    } offScreenFrameBuf;
-
-    //buffer: vkBuffer vkdevicememory vkdescriptorbufferInfo vkbufferusageFlags vkmemPropertyFlags;
+    VkCommandPool command_pool_;
 
     struct {
         VkPipelineVertexInputStateCreateInfo inputState;
         std::vector<VkVertexInputBindingDescription> bindingDescriptions;
         std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
-    } vertices_new;
+    } vertex_input_info;
 
-    /*VkImage depthImage;
-    VkDeviceMemory depthImageMemory;
-    VkImageView depthImageView;*/
+    AppFramebufferAttachment depth_attachment_;
 
-    FrameBufferAttachment depthAttachment;
-
-    struct MyTexture
-    {
-        VkImage textureImage;
-        VkDeviceMemory textureImageMemory;
-        VkImageView textureImageView;
-        VkSampler textureSampler;
-    }albedoTexture, normalMapTexture;
-    //VkImage textureImage;
-    //VkDeviceMemory textureImageMemory;
-    //VkImageView textureImageView;
-    //VkSampler textureSampler;
-
-    // TODO: read this into model_1
-    const std::vector<Vertex> vertices = {
-        {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
-        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
-    };
-
-    const std::vector<uint32_t> indices = {
-        0, 1, 2, 2, 3, 0,
-        4, 5, 6, 6, 7, 4
-    };
-
-    const std::vector<Vertex> quadVertices = {
-        {{-1.f, -1.f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{1.f, -1.f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{1.f, 1.f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-1.f, 1.f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-    };
-
-    const std::vector<uint32_t> quadIndices = {
-        0, 1, 2, 2, 3, 0
-    };
-
-
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
-
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
-
-    //std::vector<VkBuffer> uniformBuffers;
-    //std::vector<VkDeviceMemory> uniformBuffersMemory;
-
-
-
-    VkDescriptorPool descriptorPool;
-    //std::vector<VkDescriptorSet> descriptorSets;
-
-    std::vector<VkCommandBuffer> commandBuffers;
-
-    std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    std::vector<VkFence> inFlightFences;
-
-
-    
-
-    size_t currentFrame = 0;
+    VkDescriptorPool descriptor_pool_;
 
     bool framebufferResized = false;
 
@@ -272,11 +174,7 @@ private:
 
     void mainLoop();
 
-    void cleanupSwapChain();
-
     void cleanup();
-
-    void recreateSwapChain();
 
     void createInstance();
 
@@ -290,17 +188,7 @@ private:
 
     void createSwapChain();
 
-    void createImageViews();
-
-    void createRenderPass();
-
-    void createDescriptorSetLayout();
-
-    void createGraphicsPipeline_old();
-
-    void createGraphicsPipeline();
-
-    void createFramebuffers();
+    void createSwapChainImageViews();
 
     void createCommandPool();
 
@@ -312,12 +200,6 @@ private:
 
     bool hasStencilComponent(VkFormat format);
 
-    void createTextureImage();
-
-    void createTextureImageView();
-
-    void createTextureSampler();
-
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
 
     void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
@@ -326,17 +208,8 @@ private:
 
     void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
 
-    void loadModel();
-
-    void createVertexBuffer();
-
-    void createIndexBuffer();
-
-    void createUniformBuffers();
 
     void createDescriptorPool();
-
-    void createDescriptorSets();
 
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
 
@@ -347,14 +220,6 @@ private:
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-    void createCommandBuffers();
-    void createSyncObjects();
-
-    void updateUniformBuffer(uint32_t currentImage);
-
-    void drawFrame();
-
 
     VkShaderModule createShaderModule(const std::vector<char>& code);
 
@@ -388,62 +253,192 @@ private:
 
     VkPipelineCache pipelineCache;
 
-    void createOffscreenFramebuffers();
-
-    VkSampler colorSampler;
-
-    // mouse & cam
-    void initCam();
-    static void mouseDownCallback(GLFWwindow* window, int button, int action, int mods);
-    static void mouseMoveCallback(GLFWwindow* window, double xPosition, double yPosition);
-
-    // debug view
-    bool debugCam = false;
-
-    // descriptor set
-    // union buffer
-    struct {
-        MyBuffer vsFullScreen;
-        MyBuffer vsOffScreen;
-
-    }uniformBuffers;
-
-    VkPipelineLayout deferredPipelineLayout;
-    VkPipelineLayout offscreenPipelineLayout;
-    VkPipeline deferredPipeline;
-    VkPipeline offscreenPipeline;
-
     VkPipelineShaderStageCreateInfo loadShader(std::string fileName, VkShaderStageFlagBits stage);
 
     std::vector<VkShaderModule> shaderModules;
 
-    struct ModelDesctiptorSets {
-        VkDescriptorSet model_1;
-        VkDescriptorSet model_2;
-        VkDescriptorSet model_3;
-    } modelDesctiptorSets;
+    void setupVertexDescriptions();
 
-    VkDescriptorSet quadDescriptorSet;
-    VkCommandBuffer offscreenCommandBuffer = VK_NULL_HANDLE;
+    std::vector<VkFence> waitFences;
+    void initSemAndSubmitInfo();
 
-    void createOffscreenCommandBuffer();
+    VkResult queuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore = VK_NULL_HANDLE);
 
-    VkSemaphore offscreenSemaphore = VK_NULL_HANDLE;
 
-    void draw();
+	// ray tracing =================================================
+	void rt_createSema();
+	void rt_createUniformBuffers();
+    void rt_prepareStorageBuffers();
+	void rt_prepareTextureTarget(MyTexture& tex, VkFormat format, uint32_t width = WIDTH, uint32_t height = HEIGHT);
+	void rt_graphics_setupDescriptorSetLayout();
+	void rt_graphics_setupDescriptorSet();
+	void rt_createPipelineLayout();
+	void rt_createRenderpass();
+	void rt_creatFramebuffer(); // use swap chains' framebuffers
+	void rt_createPipeline();
+	//void rt_setupDescriptorPool(); // all pipeline use the same pool
+	void rt_prepareCompute();
+	void rt_createComputeCommandBuffer();
+	void rt_createRaytraceDisplayCommandBuffer();
+	void rt_draw();
 
-    void createQuadVertexBuffer();
-    void createQuadIndexBuffer();
-    void prepareQuad();
+    Sphere newSphere(glm::vec3 pos, float radius, glm::vec3 diffuse, float specular);
+    Plane newPlane(glm::vec3 normal, float distance, glm::vec3 diffuse, float specular);
+	void rt_updateUniformBuffer();
+    void rt_loadObj(std::vector<Triangle>&);
+    std::vector<Triangle> rt_all_triangles;
 
+
+	uint32_t rt_currentId = 0;
+	MyTexture rt_result;
+	RTUniformBufferObject rt_ubo;
+	RT_GEOM rt_g;
+	std::vector<VkCommandBuffer> rt_drawCommandBuffer;
+	VkSemaphore rt_complete_sema;
+
+
+    // todo: ray tracing part share the same queue with whom???????
+    
+		// union buffer
+	struct {
+		MyUniformBuffer rt_compute;
+		MyUniformBuffer rt_geom;
+	} rt_uniformBuffers;
+	
+	struct {
+      //  VkDescriptorSet descriptorSetPreCompute;	// Raytraced image display shader bindings before compute shader image manipulation
+      //  VkDescriptorSet descriptorSet;				// Raytraced image display shader bindings after compute shader image manipulation
+        VkDescriptorSetLayout descriptorSetLayout;
+        VkDescriptorSet descriptorSet;
+        VkPipelineLayout pipelineLayout;
+        VkPipeline pipeline;
+        VkRenderPass renderPass;
+    } graphics_;
+
+    struct {
+        struct rayTracingSceneObjectBuffer
+        {
+            VkBuffer buffer;
+            VkDeviceMemory deviceMem;
+        }myPlaneBuffer, mySphereBuffer, myTriBuffer;
+
+		//RT_AppSceneObject rt_scene_obj;
+
+        VkDescriptorSetLayout rt_computeDescriptorSetLayout;
+        VkDescriptorSet rt_computeDescriptorSet;
+        VkPipelineLayout rt_computePipelineLayout;
+;
+        VkPipeline rt_computePipine;
+        VkQueue rt_computeQueue;
+        VkFence rt_fence;
+        VkCommandBuffer rt_computeCmdBuffer = VK_NULL_HANDLE;
+
+    } compute_;
+
+    // offscreen =================================================
+    AppOffscreenPipelineAssets offscreen_;
+    VkSemaphore offscreen_complete_semaphore_ = VK_NULL_HANDLE;
+    void prepareOffscreen();
+    void prepareOffscreenCommandBuffer();
+    void createOffscreenUniformBuffer();
+    // this one is called before loading model
+    void createOffscreenDescriptorSetLayout();
+    void createOffscreenPipelineLayout();
+    void createOffscreenRenderPass();
+    void createOffscreenFrameBuffer();
+    void createOffscreenPipeline();
+
+    // scene loading and prepare assets =================================================
+    std::vector<AppSceneObject> scene_objects_;
+    void prepareSceneObjectsData();
+    void prepareSceneObjectsDescriptor();
+    void loadSingleSceneObjectMesh(AppSceneObject& scene_object);
+    void loadSingleSceneObjectTexture(AppTextureInfo& texture);
+    void createModelMatrixUniformBuffer(AppSceneObject& scene_object);
+    void createSceneObjectDescriptorSet(AppSceneObject& scene_object);
+
+    // skybox =================================================
+    AppSkyboxPipelineAssets skybox_;
+    VkPhysicalDeviceFeatures device_features_;
+    VkPhysicalDeviceFeatures enabled_device_features_{};
+    VkPhysicalDeviceMemoryProperties device_memory_properties_;
+    void prepareSkybox();
+    void prepareSkyboxTexture();
+    void loadSkyboxMesh();
+    void createSkyboxUniformBuffer();
+    void createSkyboxDescriptorSetLayout();
+    void createSkyboxDescriptorSet();
+    void createSkyboxPipelineLayout();
+    void createSkyboxPipeline();
+    // helper
+    void getEnabledFeatures();
+    uint32_t skybox_getMemoryType(uint32_t typeBits,
+        VkMemoryPropertyFlags properties,
+        VkBool32 *memTypeFound = nullptr);
+    // TODO: merge this in the original one
+    void skybox_transitionLayout(
+        VkCommandBuffer cmdbuffer,
+        VkImage image,
+        VkImageLayout oldImageLayout,
+        VkImageLayout newImageLayout,
+        VkImageSubresourceRange subresourceRange,
+        VkPipelineStageFlags srcStageMask,
+        VkPipelineStageFlags dstStageMask
+    );
+
+    // deferred =================================================
+    AppDeferredPipelineAssets deferred_;
+    std::vector<VkCommandBuffer> deferred_command_buffers_;
     VkBuffer quadVertexBuffer;
     VkDeviceMemory quadVertexBufferMemory;
-
     VkBuffer quadIndexBuffer;
     VkDeviceMemory quadIndexBufferMemory;
+    // TODO: put quad in here after all fo deferred
+    // is done
+    void prepareDeferred();
+    void prepareQuadVertexAndIndexBuffer();
+    void createDeferredUniformBuffer();
+    void createDeferredPBRTextures();
+    void createDeferredDescriptorSetLayout();
+    void createDeferredDescriptorSet();
+    void createDeferredPipelineLayout();
+    void createDeferredRenderPass();
+    void createSwapChainFramebuffers();
+    void createDeferredPipeline();
+    void createDeferredCommandBuffer();
+    // helper
+    void createQuadVertexBuffer();
+    void createQuadIndexBuffer();
 
-    void createQuadCommandBuffers();
+    // mouse & cam & input =================================================
+    void initCam();
+    static void mouseDownCallback(GLFWwindow* window, int button, int action, int mods);
+    static void mouseMoveCallback(GLFWwindow* window, double xPosition, double yPosition);
+    static void keyDownCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
 
-    void setupVertexDescriptions();
+    // general =================================================
+    void draw();
+    void updateUniformBuffers();
+    // FPS
+    void showFPS();
+    int frame_count_ = 0;
+    int fps_display_cycle_ = 100;
+    float fps_last_time_ = 0.0f;
+    // helper
+    void uniformBufferCpy(VkDeviceMemory& device_memory, void* ubo_ptr,
+        size_t size);
+    glm::mat4 getSkyboxModelMat();
+    VkSubmitInfo mySubmitInfo;
+
+    struct {
+        // Swap chain image presentation
+        VkSemaphore presentComplete;
+        // Command buffer submission and execution
+        VkSemaphore renderComplete;
+    } semaphores_;
+
+	// tryout =================================================
+	void createOffscreenForSkyboxAndModel();
 };
+
 
