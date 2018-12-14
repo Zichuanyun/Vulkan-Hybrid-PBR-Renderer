@@ -4,8 +4,8 @@
 
 ## Contributors
 
-- ![460xlin](https://github.com/460xlin)
-- ![Zichuanyun](https://github.com/Zichuanyun)
+- [460xlin](https://github.com/460xlin)
+- [Zichuanyun](https://github.com/Zichuanyun)
 
 ## Quick Links
 
