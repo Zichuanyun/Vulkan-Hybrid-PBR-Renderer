@@ -2,6 +2,11 @@
 
 **TODO:** Add make file
 
+## Contributors
+
+- ![460xlin](https://github.com/460xlin)
+- ![Zichuanyun](https://github.com/Zichuanyun)
+
 ## Quick Links
 
 [Alpah Final Version Slides](https://docs.google.com/presentation/d/1ycHg755oVVsuq8KG6JLaEr2uqga7lePgBr5BQCAu-M0/edit?usp=sharing)
